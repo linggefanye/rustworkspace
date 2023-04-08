@@ -53,19 +53,56 @@ fn parse_identifier(input: &str) -> IResult<&str, String> {						//提取一个�
     )(input)
 }
 
+
 fn parse_type_options(input: &str) -> IResult<&str, Vec<String>> {
-    delimited(
+    let (input, options) = delimited(
         tag("["),
         separated_list0(
             tag(","),
-            map(
-                take_while1(|c: char| c.is_alphanumeric() || c == '_' || c == ':' || c == '[' || c == ']' || c == '-'),
-                |s: &str| s.trim().to_string(),
-            ),
+            alt((
+                parse_nested_option,
+                map(
+                    take_while1(|c: char| {
+                        c.is_alphanumeric() || c == '_' || c == ':' || c == '-' || c == '.'
+                    }),
+                    |s: &str| s.trim().to_string(),
+                ),
+            )),
         ),
         tag("]"),
-    )(input)
+    )(input)?;
+
+    Ok((input, options))
 }
+
+fn parse_nested_option(input: &str) -> IResult<&str, String> {
+    let mut nesting_level = 0;
+    let mut output = String::new();
+
+    let mut chars = input.char_indices().peekable();
+
+    while let Some((idx, c)) = chars.next() {
+        match c {
+            '[' => nesting_level += 1,
+            ']' => {
+                if nesting_level == 0 {
+                    return Ok((&input[idx..], output));
+                }
+                nesting_level -= 1;
+            }
+            ',' => {
+                if nesting_level == 0 {
+                    return Ok((&input[idx..], output));
+                }
+            }
+            _ => {}
+        }
+        output.push(c);
+    }
+
+    Err(nom::Err::Error(nom::error::make_error(input, nom::error::ErrorKind::Eof)))
+}
+
 
 fn argument(input: &str) -> IResult<&str, Argument> {					
     let (input, name) = parse_identifier(input)?;							//提取参数名
@@ -101,7 +138,7 @@ fn fn_function_call(input: &str) -> IResult<&str, FunctionCall> {
 }
 
 fn main() {
-    let input = "syz_test_write(fd:fd[sock], buf:array[int8], count:int32[0:2])";
+    let input = "syz_test_write(fd:fd[sock], buf:array[array[int8]], count:int32[0:2])";
     let (_, parsed_function_call) = fn_function_call(input).expect("Failed to parse the function call");
     println!("{:#?}", parsed_function_call);
 }
