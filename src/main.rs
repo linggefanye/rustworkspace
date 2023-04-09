@@ -1,10 +1,11 @@
 use nom::{
     branch::alt,
-    multi::separated_list0,
-    bytes::complete::{tag, take_while1},
-    character::complete::{alphanumeric1, multispace0, multispace1},
+    multi::{separated_list0, fold_many0},
+    bytes::complete::{tag, take_while1, take_until},
+    character::complete::{alphanumeric1, multispace0, multispace1, char},
     combinator::{map, opt},
     sequence::{delimited, separated_pair, terminated, tuple, preceded},
+    error::context,
     IResult,
 };
 
@@ -14,7 +15,7 @@ struct FunctionCall {
     args: Vec<Argument>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Argument {
     name: String,
     typename: String,
@@ -129,16 +130,49 @@ fn parse_attributes(input: &str) -> IResult<&str, Vec<String>> {
 }
 
 fn fn_function_call(input: &str) -> IResult<&str, FunctionCall> {
-    let (input, name) = parse_identifier(input)?;							//解析函数名
-    let (input, _) = multispace0(input)?;								//除去空格
-    let (input, _) = tag("(")(input)?;								//读取到左括号
-    let (input, args) = separated_list0(terminated(tag(","), multispace0), argument)(input)?;	//以","为标识符分割函数参数
-    let (input, _) = tag(")")(input)?;								//读取到右括号
-    Ok((input, FunctionCall { name, args }))
+    let (input, name) = parse_identifier(input)?;
+    let (input, _) = multispace0(input)?;
+    let (input, _) = tag("(")(input)?;
+
+    let mut nesting_level_square = 0;
+    let mut nesting_level_round = 0;
+    let mut arg_start = 0;
+    let mut args = Vec::new();
+    for (idx, c) in input.char_indices() {
+        match c {
+            '[' => nesting_level_square += 1,
+            ']' => nesting_level_square -= 1,
+            '(' => nesting_level_round += 1,
+            ')' => {
+                if nesting_level_round == 0 {
+                    let arg_input = &input[arg_start..idx];
+                    if !arg_input.trim().is_empty() {
+                        let (_, arg) = argument(arg_input.trim())?;
+                        args.push(arg);
+                    }
+                    break;
+                }
+                nesting_level_round -= 1;
+            }
+            ',' => {
+                if nesting_level_square == 0 && nesting_level_round == 0 {
+                    let arg_input = &input[arg_start..idx];
+                    let (_, arg) = argument(arg_input.trim())?;
+                    args.push(arg);
+                    arg_start = idx + 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let (_, remaining_input) = tag(")")(input.trim_start_matches(|c| c != ')'))?;
+
+    Ok((remaining_input, FunctionCall { name, args }))
 }
 
 fn main() {
-    let input = "syz_test_write(fd:fd[sock], buf:array[array[int8]], count:int32[0:2])";
+    let input = "syz_test_write(fd:fd[sock], buf:ptr[in, array[int8]], count:int32[0:2])";
     let (_, parsed_function_call) = fn_function_call(input).expect("Failed to parse the function call");
     println!("{:#?}", parsed_function_call);
 }
