@@ -9,12 +9,13 @@ use nom::{
 };
 
 #[derive(Debug)]
-struct Field {
+struct StructField {
     name: String,
     field_type: BaseType,
     type_options: Option<Vec<String>>,
     attributes: Vec<String>,
 }
+
 
 #[derive(Debug)]
 enum BaseType {
@@ -29,7 +30,7 @@ enum BaseType {
 #[derive(Debug)]
 struct StructDef {
     name: String,
-    fields: Vec<Field>,
+    fields: Vec<StructField>,
 }
 
 fn parse_identifier(input: &str) -> IResult<&str, String> {
@@ -55,7 +56,7 @@ fn parse_base_type(input: &str) -> IResult<&str, (BaseType, Option<Vec<String>>)
     Ok((input, (base_type, type_options)))
 }
 
-fn parse_field(input: &str) -> IResult<&str, Field> {
+fn parse_StructField(input: &str) -> IResult<&str, StructField> {
     let (input, _) = multispace0(input)?;
     let (input, name) = parse_identifier(input)?;
     let (input, _) = multispace0(input)?;
@@ -73,7 +74,7 @@ fn parse_field(input: &str) -> IResult<&str, Field> {
 
     Ok((
         input,
-        Field {
+        StructField {
             name,
             field_type,
             type_options,
@@ -138,7 +139,7 @@ fn parse_struct(input: &str) -> IResult<&str, StructDef> {
     let (input, _) = multispace0(input)?;
     let (input, _) = tag("{")(input)?;
     let (input, _) = newline(input)?;
-    let (input, fields) = many0(parse_field)(input)?;
+    let (input, fields) = many0(parse_StructField)(input)?;
     let (input, _) = tag("}")(input)?;
 
     Ok((
@@ -152,9 +153,9 @@ fn parse_struct(input: &str) -> IResult<&str, StructDef> {
 
 fn main() {
     let struct_input = "struct foo {
-	field0	const[1, int32]	(in)
-	field1	int32		(inout)
-	field2	fd		(out)
+	StructField0	const[1, int32]	(in)
+	StructField1	int32		(inout)
+	StructField2	fd		(out)
 }";
     let (_, parsed_struct) = parse_struct(struct_input).expect("Failed to parse the struct");
     println!("Parsed struct: {:#?}", parsed_struct);

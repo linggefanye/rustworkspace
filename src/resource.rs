@@ -166,7 +166,9 @@ fn parse_resources(input: &str) -> IResult<&str, Vec<Resource>> {
 }
 
 fn main() {
-    let resources_input = "resource fd[int32]: 0xffffffffffffffff, 1000000\nresource sock[fd]\nresource sock_unix[sock]";
+    let resources_input = "resource fd[int32]: 0xffffffffffffffff, 1000000
+    resource sock[fd]
+    resource sock_unix[sock]";
     let (_, resources) = parse_resources(resources_input).expect("Failed to parse the resources");
     println!("Resources: {:#?}", resources);
 }
