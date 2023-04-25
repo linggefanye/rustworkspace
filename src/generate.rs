@@ -4,6 +4,17 @@ use rand::{
     SeedableRng,
 };
 
+use nom::{
+    branch::alt,
+    multi::{separated_list0, fold_many0},
+    bytes::complete::{tag, take_while1, take_until},
+    character::complete::{alphanumeric1, multispace0, multispace1, char},
+    combinator::{map, opt},
+    sequence::{delimited, separated_pair, terminated, tuple, preceded},
+    error::context,
+    IResult,
+};
+
 #[derive(Debug, Clone)]
 pub struct Target {
     syscalls: Vec<Syscall>,
@@ -30,6 +41,77 @@ enum BaseType {
     Custom(String),
 }
 
+impl BaseType {
+    pub fn generate_arg<R: Rng>(&self, rng: &mut R, dir:Dir, to: &Option<Vec<String>>)-> (Argument, Vec<Call>){
+        match self {
+            BaseType::Int8 =>{
+            	let to1 = to.as_ref();
+                let tovec = to1.unwrap();
+                let mut constval = 0;
+                if tovec.is_empty() {
+                    constval = rng.gen::<u8>() as u64;
+                }
+                else if tovec.len() == 1 {
+                    let (start, max) = parse_to(tovec.get(0).unwrap());
+                    constval = rng.gen_range(start..max) as u64;
+                }else if tovec.len() == 2{
+                    let (start, max) = parse_to(tovec.get(0).unwrap());
+                    let align = tovec.get(1).unwrap().parse::<u64>().unwrap();
+                    constval = (rng.gen_range(0..(max - start)/align) * align + start) as u64;
+                }
+                else{
+                    panic!("Unexpected type options");
+                };
+                (       
+                    Argument{
+                        typename: BaseType::Int8,
+                        dir: dir,
+                        bitsize: 8,
+                        val: constval,
+                    },
+                    Vec::new(),
+                )
+            }
+            BaseType::Int16 =>(            
+                Argument{
+                    typename: BaseType::Int16,
+                    dir: dir,
+                    bitsize: 16,
+                    val: rng.gen::<u16>() as u64,
+                },
+                Vec::new(),
+            ),
+            BaseType::Int32 =>(            
+                Argument{
+                    typename: BaseType::Int32,
+                    dir: dir,
+                    bitsize: 32,
+                    val: rng.gen::<u32>() as u64,
+                },
+                Vec::new(),
+            ),
+            BaseType::Int64 =>(            
+                Argument{
+                    typename: BaseType::Int64,
+                    dir: dir,
+                    bitsize: 64,
+                    val: rng.gen(),
+                },
+                Vec::new(),
+            ),
+            _ => panic!("Unknown BaseType"),
+        }
+
+    }
+
+}
+
+fn parse_to(input: &str) -> (u64, u64) {
+    let parts: Vec<&str> = input.trim().split(':').collect();
+    let start = parts[0].parse::<u64>().unwrap();
+    let max = parts[1].parse::<u64>().unwrap();
+    (start, max)
+}
 
 #[derive(Debug, Clone)]
 pub struct Prog {
@@ -53,13 +135,13 @@ pub struct Syscall {
 #[derive(Debug, Clone)]
 pub struct Field {
     name: String,
-    typename: String,
+    typename: BaseType,
     type_options: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Argument {
-    typename: String,
+    typename: BaseType,
     dir: Dir,
     bitsize: u64,
     val: u64,
@@ -158,7 +240,7 @@ fn generate_args<R: Rng>(
 
     // Generate all args. Size args have the default value 0 for now.
     for field in fields {
-        let (arg, mut calls1) = generate_arg(rng, &field.typename, dir.clone());
+        let (arg, mut calls1) = field.typename.generate_arg(rng, dir.clone(), &field.type_options);
         /* if arg.is_none() {
             panic!(
                 "generated arg is nil for field '{}', fields: {:?}",
@@ -173,7 +255,7 @@ fn generate_args<R: Rng>(
 }
 
 // Stub implementation of generate_arg function
-fn generate_arg<R: Rng>(
+/* fn generate_arg<R: Rng>(
     rng: &mut R,
     typename: &String,
     dir: Dir,
@@ -192,7 +274,7 @@ fn generate_arg<R: Rng>(
         _ => panic!(),
     }
 }
-
+ */
 
 
 fn main() {
@@ -201,8 +283,9 @@ fn main() {
         args: vec![
             Field {
                 name: "count".to_string(),
-                typename: "Int8".to_string(),
-                type_options: Some(vec![]),
+                typename: BaseType::Int8,
+                type_options: Some(vec!["0:20".to_string()]),
+                //type_options: Some(vec!["0:20".to_string(),"2".to_string()]),
             },
         ],
     };
