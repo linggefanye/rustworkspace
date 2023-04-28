@@ -17,21 +17,11 @@ struct Syscall {
 
 
 #[derive(Debug)]
-enum BaseType {
-    Int8,
-    Int16,
-    Int32,
-    Int64,
-    IntPtr,
-    Custom(String),
-}
-
-#[derive(Debug)]
 struct Resource {
     name: String,
-    base_type: BaseType,
-    consts: Vec<u64>,
-    type_options: Option<Vec<String>>,
+    kind: Vec<String>,
+    values: Vec<u64>,
+    ctors: Vec<i8>,
 }
 
 fn parse_identifier(input: &str) -> IResult<&str, String> {
@@ -41,21 +31,21 @@ fn parse_identifier(input: &str) -> IResult<&str, String> {
     )(input)
 }
 
-fn parse_base_type(input: &str) -> IResult<&str, (BaseType, Option<Vec<String>>)> {
-    let (input, base_type) = parse_identifier(input)?;
+/* fn parse_kind(input: &str) -> IResult<&str, (Vec<String>, Option<Vec<String>>)> {
+    let (input, kind) = parse_identifier(input)?;
     let (input, type_options) = opt(parse_type_options)(input)?;
 
-    let base_type = match base_type.as_str() {
+/*     let kind = match kind.as_str() {
         "int8" => BaseType::Int8,
         "int16" => BaseType::Int16,
         "int32" => BaseType::Int32,
         "int64" => BaseType::Int64,
         "intptr" => BaseType::IntPtr,
-        _ => BaseType::Custom(base_type),
-    };
+        _ => BaseType::Custom(kind),
+    }; */
 
-    Ok((input, (base_type, type_options)))
-}
+    Ok((input, (kind, type_options)))
+} */
 
 
 fn parse_u64(input: &str) -> IResult<&str, u64> {
@@ -126,16 +116,26 @@ fn parse_nested_option(input: &str) -> IResult<&str, String> {
     Err(nom::Err::Error(nom::error::make_error(input, nom::error::ErrorKind::Eof)))
 }
 
-fn parse_resource(input: &str) -> IResult<&str, Resource> {
+fn parse_resource<'a>(
+    input: &'a str,
+    kind_map: &mut std::collections::HashMap<String, Vec<String>>,
+) -> IResult<&'a str, Resource> {
     let (input, _) = tag("resource")(input)?;
     let (input, _) = multispace0(input)?;
     let (input, name) = parse_identifier(input)?;
     let (input, _) = multispace0(input)?;
     let (input, _) = tag("[")(input)?;
-    let (input, (base_type, type_options)) = parse_base_type(input)?;
+    let (input, kind) = parse_identifier(input)?;
     let (input, _) = tag("]")(input)?;
+
+    let mut kind_vec = vec![kind.clone()];
+    if let Some(parent_kinds) = kind_map.get(&kind) {
+        kind_vec.extend(parent_kinds.iter().cloned());
+    }
+    kind_map.insert(name.clone(), kind_vec.clone());
+
     let (input, _) = multispace0(input)?;
-    let (input, consts) = opt(preceded(
+    let (input, values) = opt(preceded(
         tag(":"),
         separated_list0(
             delimited(multispace0, tag(","), multispace0),
@@ -143,25 +143,24 @@ fn parse_resource(input: &str) -> IResult<&str, Resource> {
         ),
     ))(input)?;
 
-
     Ok((
         input,
         Resource {
             name,
-            base_type,
-            consts: consts.unwrap_or_else(|| vec![]),
-            type_options,
+            kind: kind_vec,
+            values: values.unwrap_or_else(|| vec![]),
+            ctors: vec![],
         },
     ))
 }
 
 fn parse_resources(input: &str) -> IResult<&str, Vec<Resource>> {
-    let (input, resources) = many0(
-        terminated(
-            parse_resource,
-            opt(delimited(multispace0, newline, multispace0)),
-        ),
-    )(input)?;
+    let mut kind_map = std::collections::HashMap::new();
+    let (input, resources) = many0(terminated(
+        move |input| parse_resource(input, &mut kind_map),
+        opt(delimited(multispace0, newline, multispace0)),
+    ))(input)?;
+
     Ok((input, resources))
 }
 
