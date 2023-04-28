@@ -4,31 +4,61 @@ use rand::{
     SeedableRng,
 };
 
-use nom::{
-    branch::alt,
-    multi::{separated_list0, fold_many0},
-    bytes::complete::{tag, take_while1, take_until},
-    character::complete::{alphanumeric1, multispace0, multispace1, char},
-    combinator::{map, opt},
-    sequence::{delimited, separated_pair, terminated, tuple, preceded},
-    error::context,
-    IResult,
-};
+use std::collections::HashMap;
+use std::cell::RefCell;
 
 #[derive(Debug, Clone)]
 pub struct Target {
     syscalls: Vec<Syscall>,
     resources: Vec<Resource>,
 
+    page_size: u64,
+	num_pages: u64,
+
+    resource_map: HashMap<String, Resource>,
+    resource_ctors: HashMap<String, Vec<Syscall>>, 
+
     //...
 }
 
-#[derive(Debug, Clone)]
-pub struct Resource {
+impl Target{
+    pub fn is_compatible_resource(&self, dst:String, src: String) -> bool {
+        
+        let dst_res = self.resource_map.get(&dst).unwrap();
+        let src_res = self.resource_map.get(&src).unwrap();
+
+        is_compatible_resource_impl(&dst_res.kind, &src_res.kind)
+    }
+
+    fn is_compatible_resource_impl(dst_kind: &Vec<String>, src_kind: &Vec<String>/* , precise: bool */) -> bool {
+        if dst_kind.len() > src_kind.len() {
+            // Destination resource is more specialized, e.g dst=socket, src=fd.
+            /* if precise {
+                return false;
+            } */
+        } else if src_kind.len() > dst_kind.len() {
+            // Source resource is more specialized, e.g dst=fd, src=socket.
+            let src_kind = &src_kind[..dst_kind.len()];
+        }
+    
+        for (k_dst, k_src) in dst_kind.iter().zip(src_kind) {
+            if k_dst != k_src {
+                return false;
+            }
+        }
+    
+        true
+    }
+
+    /* pub fn assign_sizes_call(c: Call) */
+}
+
+#[derive(Debug)]
+struct Resource {
     name: String,
-    base_type: BaseType,
-    consts: Vec<u64>,
-    type_options: Option<Vec<String>>,
+    kind: Vec<String>,
+    values: Vec<u64>,
+    ctors: Vec<i8>,
 }
 
 #[derive(Debug, Clone)]
@@ -38,11 +68,13 @@ enum BaseType {
     Int32,
     Int64,
     IntPtr,
+    ResourceType(Resource),
+    PointerType(Argument),
     Custom(String),
 }
 
 impl BaseType {
-    pub fn generate_arg<R: Rng>(&self, rng: &mut R, dir:Dir, to: &Option<Vec<String>>)-> (Argument, Vec<Call>){
+    pub fn generate_arg<R: Rng>(&self, rng: &mut R, s:&State, dir:Dir, to: &Option<Vec<String>>)-> (Argument, Vec<Call>){
         match self {
             BaseType::Int8 =>{
             	let to1 = to.as_ref();
@@ -99,6 +131,13 @@ impl BaseType {
                 },
                 Vec::new(),
             ),
+            BaseType::ResourceType =>{
+                let (arg, calls) = create_resource(rng, s, self, dir);
+                (
+                    arg,
+                    calls,
+                )
+            }
             _ => panic!("Unknown BaseType"),
         }
 
@@ -106,11 +145,66 @@ impl BaseType {
 
 }
 
+fn create_resource<R: Rng>(
+    rng: &mut R,
+    s: &State,
+    res: &BaseType::ResourceType,
+    dir: Dir,
+) -> (ResultArg, Vec<Call>) {
+    let kind = res.desc.name.clone();
+    let metas = enabled_ctors(s, &kind);
+
+    /* if metas.is_empty() {
+        return (ResultArg::make_result_arg(None, 0), vec![]);
+    } */
+
+    let meta = &metas[rng.gen_range(0..metas.len())];
+    let calls = generate_particular_call(rng, s, meta);
+    let mut s1 = State::new(s.target.clone());
+    s1.analyze(&calls[calls.len() - 1]);
+
+    let mut all_res: Vec<RefCell<ResultArg>> = Vec::new();
+    for (kind1, res1) in s1.resources.iter() {
+        if s.target.is_compatible_resource(&kind, kind1) {
+            all_res.extend(res1.iter().cloned());
+        }
+    }
+
+    /* all_res.sort_by(|a, b| a.borrow().type_().name().cmp(&b.borrow().type_().name())); */
+
+    /* if all_res.is_empty() {
+        panic!(
+            "failed to create a resource {:?} ({:?}) with {:?}",
+            res.Resource.kind[0], kind, meta.name
+        );
+    } */
+
+    let arg = ResultArg::make_result_arg(
+        Some(all_res[rng.gen_range(0..all_res.len())].clone()),
+        0,
+    );
+    (arg, calls)
+}
+
+
 fn parse_to(input: &str) -> (u64, u64) {
     let parts: Vec<&str> = input.trim().split(':').collect();
     let start = parts[0].parse::<u64>().unwrap();
     let max = parts[1].parse::<u64>().unwrap();
     (start, max)
+}
+
+
+fn enabled_ctors(s: &State, kind: String) -> Vec<Syscall>{
+    let mut metas: Vec<Syscall> = Vec::new();
+
+    if let Some(ctors) = s.resource_ctors.get(kind) {
+        for meta in ctors {
+            metas.push(meta.clone());
+        }
+    }
+    metas
+
 }
 
 #[derive(Debug, Clone)]
@@ -123,6 +217,7 @@ pub struct Prog {
 pub struct Call {
     pub meta: Syscall,
     pub args: Vec<Argument>,
+    pub ret: ResultArg,
     //...
 }
 
@@ -130,6 +225,7 @@ pub struct Call {
 pub struct Syscall {
     pub name: String,
     pub args: Vec<Field>,
+    pub ret: Option<BaseType>,
 }
 
 #[derive(Debug, Clone)]
@@ -138,6 +234,108 @@ pub struct Field {
     typename: BaseType,
     type_options: Option<Vec<String>>,
 }
+
+#[derive(Debug, Clone)]
+pub struct ResultArg {
+    // ... 其他成员变量
+
+    res: Option<RefCell<ResultArg>>,
+    /* oppdiv: u64,
+    oppadd: u64, */
+    val: u64,
+    uses: HashMap<RefCell<ResultArg>, bool>,
+}
+
+impl ResultArg {
+    // 创建一个新的 ResultArg
+    fn make_result_arg(/* t: BaseType, dir: Dir, */ r: Option<RefCell<ResultArg>>, v: u64) -> Self {
+        let mut result_arg = ResultArg {
+            res: None,
+            val: v,
+            uses: HashMap::new(),
+        };
+        if let Some(rc_res) = r {
+            result_arg.res = Some(rc_res);
+            if rc_res.borrow().uses.is_empty() {
+                rc_res.borrow_mut().uses = HashMap::new();
+            }
+            rc_res.borrow_mut().uses.insert(RefCell::new(result_arg.clone()), true);
+        }
+        result_arg
+    }
+
+    // 添加使用这个 ResultArg 的其他 ResultArg
+    fn add_use(&mut self, other: &RefCell<ResultArg>) {
+        self.uses.insert(other.clone(), true);
+    }
+
+    // 移除使用这个 ResultArg 的其他 ResultArg
+    fn remove_use(&mut self, other: &RefCell<ResultArg>) {
+        self.uses.remove(other);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct State{
+    pub target: Target,
+    pub corpus: Vec<Prog>,
+    pub resources: HashMap<String, Vec<RefCell<ResultArg>>>,
+    pub ma: MemAlloc,
+}
+
+impl State {
+    pub fn new(target: Target/* , corpus: Vec<prog> */) -> self{
+        State{
+            target: target,
+            corpus: vec![],
+            resource: HashMap::new(),
+            ma: MemAlloc::new(target.page_size*target.num_pages).expect("Failed to create MemAlloc instance"),
+        }
+    }
+
+    pub fn analyze(&mut self, c: Call){
+
+    }
+}
+
+pub struct MemAlloc {
+    size: u64,
+    mem: [[u64; MEM_ALLOC_L0_SIZE]; MEM_ALLOC_L1_SIZE],
+    buf: [u64; MEM_ALLOC_L0_SIZE],
+}
+
+impl MemAlloc {
+    pub fn new(total_mem_size: u64) -> Result<Self, String> {
+        if total_mem_size > MEM_ALLOC_MAX_MEM {
+            return Err(format!(
+                "new_mem_alloc: too much mem {} (max: {})",
+                total_mem_size, MEM_ALLOC_MAX_MEM
+            ));
+        }
+        if total_mem_size % MEM_ALLOC_L0_MEM != 0 {
+            return Err(format!(
+                "new_mem_alloc: unaligned size {} (align: {})",
+                total_mem_size, MEM_ALLOC_L0_MEM
+            ));
+        }
+        let size = total_mem_size / MEM_ALLOC_GRANULE;
+        let mut mem = vec![None; MEM_ALLOC_L1_SIZE];
+        let buf = vec![0u64; MEM_ALLOC_L0_SIZE];
+        mem[0] = Some(buf.clone());
+        Ok(Self { size, mem, buf })
+    }
+}
+
+
+const MEM_ALLOC_GRANULE: u64 = 64;
+const MEM_ALLOC_MAX_MEM: u64 = 16 << 20;
+const MEM_ALLOC_L0_SIZE: u64 = 64;
+const BITS_PER_U64: u64 = 8 * 8;
+const MEM_ALLOC_L0_MEM: u64 = MEM_ALLOC_L0_SIZE * MEM_ALLOC_GRANULE * BITS_PER_U64;
+const MEM_ALLOC_L1_SIZE: u64 = MEM_ALLOC_MAX_MEM / MEM_ALLOC_L0_MEM;
+
+trait 
+
 
 #[derive(Debug, Clone)]
 pub struct Argument {
@@ -160,12 +358,12 @@ pub fn generate(target: &Target, rs: u64, ncalls: usize/* , ct: Option<&ChoiceTa
         calls: Vec::new(),
     };
     let mut rng = StdRng::seed_from_u64(rs);
-    //let s = State::new(target, ct, None);
+    let s = State::new(target);
 
     while p.calls.len() < ncalls {
-        let calls = generate_call(&mut rng, /* &s, */ p.calls.len(), &mut p);
+        let calls = generate_call(&mut rng, &s, p.calls.len(), &mut p);
         for c in calls {
-            /* s.analyze(c); */
+            s.analyze(c);
             p.calls.push(c);
         }
     }
@@ -181,7 +379,7 @@ pub fn generate(target: &Target, rs: u64, ncalls: usize/* , ct: Option<&ChoiceTa
 
 fn generate_call<R: Rng>(
     rng: &mut R,
-    /* s: &State, */
+    s: &State, 
     insertion_point: usize,
     p: &mut Prog,
 ) -> Vec<Call> {
@@ -197,12 +395,12 @@ fn generate_call<R: Rng>(
     let syscall_count = p.target.syscalls.len(); // Replace with the appropriate method to get the number of syscalls
     let idx = rng.gen_range(0..syscall_count);
     let meta = &p.target.syscalls[idx];
-    generate_particular_call(rng,/*  s, */ meta)
+    generate_particular_call(rng, s, meta)
 }
 
 fn generate_particular_call<R: Rng>(
     rng: &mut R,
-   /*  s: &State, */
+    s: &State,
     meta: &Syscall,
 ) -> Vec<Call> {
     /* if meta.attrs.disabled {
@@ -213,7 +411,7 @@ fn generate_particular_call<R: Rng>(
     } */
     
     let mut c = make_call(meta, Vec::new());
-    let (args, mut calls) = generate_args(rng,/*  s,  */&meta.args, Dir::DirIn);
+    let (args, mut calls) = generate_args(rng, s, &meta.args, Dir::DirIn);
     c.args = args;
     /* s.target.assign_sizes_call(&mut c); */
     calls.push(c);
@@ -231,7 +429,7 @@ fn make_call(meta: &Syscall, args: Vec<Argument>) -> Call {
 
 fn generate_args<R: Rng>(
     rng: &mut R,
-    /* s: &State, */
+    s: &State,
     fields: &Vec<Field>,
     dir: Dir,
 ) -> (Vec<Argument>, Vec<Call>) {
@@ -240,7 +438,7 @@ fn generate_args<R: Rng>(
 
     // Generate all args. Size args have the default value 0 for now.
     for field in fields {
-        let (arg, mut calls1) = field.typename.generate_arg(rng, dir.clone(), &field.type_options);
+        let (arg, mut calls1) = field.typename.generate_arg(rng, s, dir.clone(), &field.type_options);
         /* if arg.is_none() {
             panic!(
                 "generated arg is nil for field '{}', fields: {:?}",
@@ -284,8 +482,7 @@ fn main() {
             Field {
                 name: "count".to_string(),
                 typename: BaseType::Int8,
-                type_options: Some(vec!["0:20".to_string()]),
-                //type_options: Some(vec!["0:20".to_string(),"2".to_string()]),
+                type_options: Some(vec!["0:20".to_string(),"2".to_string()]),
             },
         ],
     };
@@ -296,7 +493,7 @@ fn main() {
         // ...
     };
 
-    let prog = generate(&target, 12345, 1);
+    let prog = generate(&target, rand::thread_rng().gen(), 1);
 
     println!("Generated Prog: {:#?}", prog);
 
