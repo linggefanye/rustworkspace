@@ -14,8 +14,8 @@ use nom::{
 use std::{fs::read_to_string, path::PathBuf};
 
 use crate::{
-    ASTInt, ASTNode, ASTString, CallNode, Field, Ident, IntFlagsNode, IntFmt,
-    Pos, ResourceNode, StrFlagsNode, StrFmt, StructNode, Type, TypeDefNode,
+    ASTInt, ASTNode, ASTString, CallNode, ASTField, Ident, IntFlagsNode, IntFmt,
+    Pos, ResourceNode, StrFlagsNode, StrFmt, StructNode, ASTType, TypeDefNode,
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -328,7 +328,7 @@ impl Parser {
     pub fn parse_type<'a>(
         &'a self,
         input: &'a str,
-    ) -> IResult<&str, Type, ParserError> {
+    ) -> IResult<&str, ASTType, ParserError> {
         Err(ParserError::NotAType.into())
     }
 
@@ -336,7 +336,7 @@ impl Parser {
     pub fn parse_field<'a>(
         &'a self,
         input: &'a str,
-    ) -> IResult<&str, Field, ParserError> {
+    ) -> IResult<&str, ASTField, ParserError> {
         Err(ParserError::NotAField.into())
     }
 

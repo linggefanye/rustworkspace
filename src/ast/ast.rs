@@ -32,30 +32,24 @@ pub struct Ident {
 }
 
 #[derive(Debug)]
-pub struct Type {
+pub struct ASTType {
     pub pos: Pos,
     pub value: u64,
     pub value_fmt: IntFmt,
     pub ident: String,
     pub string: Option<String>,
     pub string_fmt: Option<StrFmt>,
-    pub colon: Vec<Type>,
-    pub args: Vec<Type>,
+    pub colon: Vec<ASTType>,
+    pub args: Vec<ASTType>,
 }
 
 #[derive(Debug)]
-pub struct Field {
-    pos: Pos,
-    name: Ident,
-    typ: Type,
-    attrs: Vec<Type>,
-    new_block: bool,
-}
-
-impl Field {
-    pub fn get_name(&self) -> &str {
-        &self.name.name
-    }
+pub struct ASTField {
+    pub pos: Pos,
+    pub name: Ident,
+    pub typ: ASTType,
+    pub attrs: Vec<ASTType>,
+    pub new_block: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -134,7 +128,7 @@ impl ASTNode for IntFlagsNode {
 pub struct ResourceNode {
     pub pos: Pos,
     pub name: Ident,
-    pub base: Type,
+    pub base: ASTType,
     pub values: Vec<ASTInt>,
 }
 
@@ -158,9 +152,9 @@ pub struct CallNode {
     pub name: Ident,
     pub call_name: String,
     pub idx: usize,
-    pub args: Vec<Field>,
-    pub ret: Type,
-    pub attrs: Vec<Type>,
+    pub args: Vec<ASTField>,
+    pub ret: ASTType,
+    pub attrs: Vec<ASTType>,
 }
 
 impl ASTNode for CallNode {
@@ -181,8 +175,8 @@ impl ASTNode for CallNode {
 pub struct StructNode {
     pub pos: Pos,
     pub name: Ident,
-    pub fields: Vec<Field>,
-    pub attrs: Vec<Type>,
+    pub fields: Vec<ASTField>,
+    pub attrs: Vec<ASTType>,
     pub is_union: bool,
 }
 
@@ -205,7 +199,7 @@ pub struct TypeDefNode {
     pub pos: Pos,
     pub name: Ident,
     pub args: Vec<Ident>,
-    pub typ: Type,
+    pub typ: ASTType,
     pub struc: StructNode,
 }
 
