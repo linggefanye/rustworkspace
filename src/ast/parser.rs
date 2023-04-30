@@ -324,52 +324,28 @@ impl Parser {
         }
     }
 
-
-    fn parse_nested_type(input: &str) -> IResult<&str, Vec<ASTType>> {
-        let (input, _) = tag("[")(input)?;
-        let mut args = Vec::new();
-        let mut open_brackets = 1;
-        let mut start = input;
-    
-        for (i, c) in input.char_indices() {
-            match c {
-                '[' => open_brackets += 1,
-                ']' => open_brackets -= 1,
-                ',' if open_brackets == 1 => {
-                    let (remaining, arg) = parse_type(&start[..i])?;
-                    args.push(arg);
-                    start = remaining;
-                }
-                _ => continue,
-            }
-    
-            if open_brackets == 0 {
-                let (remaining, arg) = parse_type(&start[..i])?;
-                args.push(arg);
-                return Ok((remaining, args));
-            }
-        }
-    
-        Err(nom::Err::Error((input, nom::error::ErrorKind::Char)))
-    }
-
-    // TODO: implement this
     pub fn parse_type<'a>(
         &'a self,
         input: &'a str,
     ) -> IResult<&str, ASTType, ParserError> {
-        pub fn parse_type<'a>(input: &'a str) -> IResult<&str, ASTType, ParserError> {
-            let (input, _) = multispace0(input)?;
-            let (input, ident) = alpha1(input)?;
-
-            let (input, args) = opt(parse_nested_type)(input)?;
-
-            let args = args.unwrap_or_default();
-
+        let (input, ident_res) = opt(|i| self.parse_ident(i))(input)?;
+        if let Some(ident) = ident_res {
+            let (input, args_res) = opt(|i| delimited(
+                tag("["),
+                |i| {
+                    let (i, head) = self.parse_type(i)?;
+                    let (i, tail) = many0(preceded(tag(","), |i| self.parse_type(i)))(i)?;
+                    let mut args = vec![head];
+                    args.extend(tail);
+                    Ok((i, args))
+                },
+                tag("]"),
+            ))(input)?;
+            let args = args_res.unwrap_or_default();
             Ok((
                 input,
                 ASTType {
-                    pos: Pos::default(), // you might want to set the actual position here
+                    pos: self.pos.clone(),
                     value: None,
                     ident: Some(ident),
                     string: None,
@@ -377,7 +353,49 @@ impl Parser {
                     args,
                 },
             ))
+        } else {
+            let (input, value_res) = opt(|i| self.parse_int(i))(input)?;
+            if let Some(value) = value_res {
+                let (input, colon_res) = opt(|i| preceded(tag(":"), |i| self.parse_int(i)))(input)?;
+                let mut colon = Vec::new();
+                if let Some(colon_value) = colon_res {
+                    colon.push(ASTType {
+                        pos: self.pos.clone(),
+                        value: Some(colon_value),
+                        ident: None,
+                        string: None,
+                        colon: Vec::new(),
+                        args: Vec::new(),
+                    });
+                }
+                Ok((
+                    input,
+                    ASTType {
+                        pos: self.pos.clone(),
+                        value: Some(value),
+                        ident: None,
+                        string: None,
+                        colon,
+                        args: Vec::new(),
+                    },
+                ))
+            } else {
+                let (input, string) = self.parse_string(input)?;
+                Ok((
+                    input,
+                    ASTType {
+                        pos: self.pos.clone(),
+                        value: None,
+                        ident: None,
+                        string: Some((string, StrFmt::Raw)),
+                        colon: Vec::new(),
+                        args: Vec::new(),
+                    },
+                ))
+            }
+        }
     }
+    
 
     // TODO: implement this
     pub fn parse_field<'a>(
@@ -521,8 +539,31 @@ impl Parser {
         input: &'a str,
     ) -> IResult<&str, CallNode, ParserError> {
         
+        let (input, name) = parse_ident(input)?;
+        let call_name = name.name;
 
-        Err(ParserError::NotACall.into())
+        let (input, args) = delimited(
+            tag("("),
+            separated_list0(
+                delimited(multispace0, tag(","), multispace0),
+                parse_field,
+            ),
+            tag(")"),
+        )(input)?;
+
+        let (input, ret) = opt(parse_type)(input)?;
+
+    
+        /* Err(ParserError::NotACall.into()) */
+
+        CallNode {
+            pos: self.pos.clone(),
+            name,
+            call_name,
+            args,
+            ret,
+            attrs: vec![],
+        }
     }
 
     // TODO: implement this
@@ -913,5 +954,17 @@ mod tests {
                 .expect("should be good");
             assert!(res == ParserError::NotAFlags);
         }
+    }
+
+    #[test]
+    fn test_parse_call(){
+        let parser = Parser::new(None);
+        let positive_samples = [
+            "test_call1(fd:fd[sock], count:int32[0:2]) fd\n",
+            "test_call2(count:int32[0:100,2])"
+        ];
+        for ps in positive_samples {
+            parser.parse_call(ps).expect("should be good").1;
+        }    
     }
 }
