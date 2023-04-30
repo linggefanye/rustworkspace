@@ -334,9 +334,6 @@ const BITS_PER_U64: u64 = 8 * 8;
 const MEM_ALLOC_L0_MEM: u64 = MEM_ALLOC_L0_SIZE * MEM_ALLOC_GRANULE * BITS_PER_U64;
 const MEM_ALLOC_L1_SIZE: u64 = MEM_ALLOC_MAX_MEM / MEM_ALLOC_L0_MEM;
 
-trait 
-
-
 #[derive(Debug, Clone)]
 pub struct Argument {
     typename: BaseType,
