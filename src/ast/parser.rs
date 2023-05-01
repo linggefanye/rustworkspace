@@ -328,73 +328,121 @@ impl Parser {
         &'a self,
         input: &'a str,
     ) -> IResult<&str, ASTType, ParserError> {
-        let Ok((input, ident_res)) = opt::<_, _, nom::error::Error<_>, _>(|i| self.parse_ident(i))(input);
-        if let Some(ident) = ident_res {
-            let (input, args_res) = opt::<_, _, nom::error::Error<_>, _>(|i| delimited(
-                tag::<_, _, nom::error::Error<_>>("["),
-                |i| {
-                    let Ok((i, head)) = self.parse_type(i);
-                    let Ok((i, tail)) = many0::<_, _, nom::error::Error<_>, _>(preceded(tag(","), |i| self.parse_type(i)))(i);
-                    let mut args = vec![head];
-                    args.extend(tail);
-                    Ok((i, args))
-                },
-                tag::<_, _, nom::error::Error<_>>("]"),
-            ))(input);
-            let args = args_res.unwrap_or_default();
-            Ok((
-                input,
-                ASTType {
-                    pos: self.pos.clone(),
-                    value: None,
-                    ident: Some(ident),
-                    string: None,
-                    colon: Vec::new(),
-                    args,
-                },
-            ))
-        } else {
-            let Ok((input, value_res)) = opt::<_, _, nom::error::Error<_>, _>(|i| self.parse_int(i))(input);
-            if let Some(value) = value_res {
-                let Ok((input, colon_res)) = opt::<_, _, nom::error::Error<_>, _>(|i| preceded(tag::<_, _, nom::error::Error<_>>(":"), |i| self.parse_int(i)))(input);
-                let mut colon = Vec::new();
-                if let Some(colon_value) = colon_res {
-                    colon.push(ASTType {
-                        pos: self.pos.clone(),
-                        value: Some(colon_value),
-                        ident: None,
-                        string: None,
-                        colon: Vec::new(),
-                        args: Vec::new(),
-                    });
+        let res = self.parse_ident(input);
+        if let Ok((remaining, ident)) = res {
+            let mut colon: Vec<ASTType> = Vec::new();
+            let mut args: Vec<ASTType> = Vec::new();
+            let res = tag::<_, _, nom::error::Error<_>>("[")(remaining);
+            if let Ok((remaining, _)) = res {
+                let mut cursor = remaining;
+                loop {
+                    let res = self.parse_type(cursor);
+                    if let Ok((remaining, ast_type)) = res {
+                        args.push(ast_type);
+                        cursor = remaining;
+                    } else {
+                        break;
+                    }
+    
+                    let res = tag::<_, _, nom::error::Error<_>>(",")(cursor);
+                    if res.is_err() {
+                        break;
+                    } else {
+                        cursor = res.unwrap().0;
+                    }
                 }
-                Ok((
-                    input,
-                    ASTType {
-                        pos: self.pos.clone(),
-                        value: Some((value, IntFmt::Dec)),
-                        ident: None,
-                        string: None,
-                        colon,
-                        args: Vec::new(),
-                    },
-                ))
-            } else {
-                let Ok((input, string)) = self.parse_string(input);
-                Ok((
-                    input,
+    
+                let res = tag::<_, _, nom::error::Error<_>>("]")(cursor);
+                if res.is_err() {
+                    return Err(ParserError::TypeParseError.into());
+                } else {
+                    cursor = res.unwrap().0;
+                }
+                return Ok((
+                    cursor,
                     ASTType {
                         pos: self.pos.clone(),
                         value: None,
-                        ident: None,
-                        string: Some((string, StrFmt::Raw)),
-                        colon: Vec::new(),
-                        args: Vec::new(),
+                        ident: Some(ident),
+                        string: None,
+                        colon,
+                        args,
                     },
-                ))
+                ));
+            } else {
+                return Ok((
+                    remaining,
+                    ASTType {
+                        pos: self.pos.clone(),
+                        value: None,
+                        ident: Some(ident),
+                        string: None,
+                        colon,
+                        args,
+                    },
+                ));
             }
         }
+    
+        let res = self.parse_int(input);
+        if let Ok((remaining, ast_int)) = res {
+            let mut colon: Vec<ASTType> = Vec::new();
+            let res = tag::<_, _, nom::error::Error<_>>(":")(remaining);
+            if let Ok((remaining, _)) = res {
+                let mut cursor = remaining;
+                loop {
+                    let res = self.parse_type(cursor);
+                    if let Ok((remaining, ast_type)) = res {
+                        colon.push(ast_type);
+                        cursor = remaining;
+                    } else {
+                        break;
+                    }
+    
+                    let res = tag::<_, _, nom::error::Error<_>>(",")(cursor);
+                    if res.is_err() {
+                        break;
+                    } else {
+                        cursor = res.unwrap().0;
+                    }
+                }
+            }
+            return Ok((
+                remaining,
+                ASTType {
+                    pos: self.pos.clone(),
+                    value: Some((ast_int, IntFmt::Dec)),
+                    ident: None,
+                    string: None,
+                    colon,
+                    args: Vec::new(),
+                },
+            ));
+        }
+    
+        let res = self.parse_string(input);
+        if let Ok((remaining, ast_string)) = res {
+            return Ok((
+                remaining,
+                ASTType {
+                    pos: self.pos.clone(),
+                    value: None,
+                    ident: None,
+                    string: Some((ast_string, StrFmt::Raw)),
+                    colon: Vec::new(),
+                    args: Vec::new(),
+                },
+            ));
+        }
+    
+        Err(nom::Err::Failure(ParserError::TypeParseError))
     }
+    
+    
+    
+    
+
+    
     
 
     // TODO: implement this
@@ -402,22 +450,58 @@ impl Parser {
         &'a self,
         input: &'a str,
     ) -> IResult<&str, ASTField, ParserError> {
-        let Ok((input, _)) = multispace0::<_, nom::error::Error<_>>(input);
-        let Ok((input, name)) = self.parse_ident(input);							
-        let Ok((input, _)) = tag::<_, _, nom::error::Error<_>>(":")(input);								
-        let Ok((input, typ)) = self.parse_type(input);						
-        let Ok((input, _)) = multispace0::<_, nom::error::Error<_>>(input);
-        
-        let (input, attrs) = opt(delimited(
-            tag::<_, _, nom::error::Error<_>>("("),
-            separated_list0(multispace0, self::parse_type),
-            tag::<_, _, nom::error::Error<_>>(")"),
-        ))(input);
     
-        let attrs = attrs.unwrap_or_default();
-    
+        let res = self.parse_ident(input);
+        if res.is_err() {
+            return Err(ParserError::NotAField.into());
+        }
+        let (mut remaining, name) = res.unwrap();
+
+        let res = tag::<_, _, nom::error::Error<_>>(":")(remaining);
+        if res.is_err() {
+            return Err(ParserError::NotAField.into());
+        }
+        let (input, _) = res.unwrap();
+
+        let res = self.parse_type(input);
+        if res.is_err() {
+            return Err(ParserError::NotAField.into());
+        }
+        let (mut remaining, typ) = res.unwrap();
+
+        let mut attrs = Vec::new();
+        let res = opt(tag::<_, _, nom::error::Error<_>>("["))(remaining);
+        if let Ok((new_input, _)) = res {
+            remaining = new_input;
+            loop {
+                let res = self.parse_type(remaining);
+                if res.is_err() {
+                    return Err(ParserError::NotAField.into());
+                }
+                let (new_input, attr) = res.unwrap();
+                attrs.push(attr);
+                remaining = new_input;
+                let res = opt(tag::<_, _, nom::error::Error<_>>(","))(remaining);
+                if res.is_err() {
+                    return Err(ParserError::NotAField.into());
+                }
+                let (new_input, has_comma) = res.unwrap();
+                remaining = new_input;
+
+                if has_comma.is_none() {
+                    break;
+                }
+            }
+            let res = tag::<_, _, nom::error::Error<_>>("]")(remaining);
+            if res.is_err() {
+                return Err(ParserError::NotAField.into());
+            }
+            let (input, _) = res.unwrap();
+            remaining = input;
+        }
+
         Ok((
-            input,
+            remaining,
             ASTField {
                 pos: self.pos.clone(),
                 name,
@@ -538,31 +622,61 @@ impl Parser {
         &'a self,
         input: &'a str,
     ) -> IResult<&str, CallNode, ParserError> {
-        
-        let Ok((input, name)) = self.parse_ident(input);
-        let call_name = name.name;
+        let res = self.parse_ident(input);
+        if res.is_err() {
+            return Err(ParserError::NotACall.into());
+        }
+        let (mut remaining, name) = res.unwrap();
+        let call_name = name.name.clone();
 
-        let (input, args) = delimited(
-            tag::<_, _, nom::error::Error<_>>("("),
-            separated_list0(
-                delimited(multispace0, tag(","), multispace0),
-                self::parse_field,
-            ),
-            tag::<_, _, nom::error::Error<_>>(")"),
-        )(input);
+        let res = tag::<_, _, nom::error::Error<_>>("(")(remaining);
+        if res.is_err() {
+            return Err(ParserError::NotACall.into());
+        }
+        let (input, _) = res.unwrap();
 
-        let (input, ret) = opt::<_, _, nom::error::Error<_>, _>(self::parse_type)(input);
+        let mut args = Vec::new();
 
-    
-        /* Err(ParserError::NotACall.into()) */
+        loop {
+            let res = self.parse_field(remaining);
+            if res.is_err() {
+                return Err(ParserError::NotACall.into());
+            }
+            let (new_input, arg) = res.unwrap();
+            args.push(arg);
+            remaining = new_input;
+            let res = opt(tag::<_, _, nom::error::Error<_>>(","))(remaining);
+            if res.is_err() {
+                return Err(ParserError::NotACall.into());
+            }
+            let (new_input, has_comma) = res.unwrap();
+            remaining = new_input;
+
+            if has_comma.is_none() {
+                break;
+            }
+        }
+
+        let res = tag::<_, _, nom::error::Error<_>>(")")(remaining);
+        if res.is_err() {
+            return Err(ParserError::NotACall.into());
+        }
+        let (input, _) = res.unwrap();
+
+        let res = self.parse_type(input);
+        if res.is_err() {
+            return Err(ParserError::NotACall.into());
+        }
+        let (remaining, ret) = res.unwrap();
+
         Ok((
-            input,
+            remaining,
             CallNode {
                 pos: self.pos.clone(),
                 name,
                 call_name,
                 args,
-                ret,
+                ret: Some(ret),
                 attrs: vec![],
             },
         ))
@@ -956,6 +1070,18 @@ mod tests {
                 .expect("should be good");
             assert!(res == ParserError::NotAFlags);
         }
+    }
+
+    #[test]
+    fn test_parse_type(){
+        let parser = Parser::new(None);
+        let positive_samples = [
+            "int32[1:10, 2]\n",
+            "ptr[in, array[int8]]\n"
+        ];
+        for ps in positive_samples {
+            parser.parse_type(ps).expect("should be good").1;
+        } 
     }
 
     #[test]
