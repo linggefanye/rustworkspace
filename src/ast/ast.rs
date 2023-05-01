@@ -35,7 +35,7 @@ pub struct Ident {
 pub struct ASTType {
     pub pos: Pos,
     pub value: Option<(ASTInt, IntFmt)>,
-    pub ident: Option<String>,
+    pub ident: Option<Ident>,
     pub string: Option<(ASTString, StrFmt)>,
     pub colon: Vec<ASTType>,
     pub args: Vec<ASTType>,
@@ -150,7 +150,7 @@ pub struct CallNode {
     pub name: Ident,
     pub call_name: String,
     pub args: Vec<ASTField>,
-    pub ret: ASTType,
+    pub ret: Option<ASTType>,
     pub attrs: Vec<ASTType>,
 }
 

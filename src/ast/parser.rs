@@ -6,8 +6,8 @@ use nom::{
         alpha1, alphanumeric1, anychar, digit1, hex_digit1, multispace0,
         none_of, one_of, space0,
     },
-    combinator::recognize,
-    multi::{many0, many1},
+    combinator::{opt, recognize},
+    multi::{many0, many1, separated_list0},
     sequence::{delimited, pair, preceded, tuple},
     IResult,
 };
@@ -328,19 +328,19 @@ impl Parser {
         &'a self,
         input: &'a str,
     ) -> IResult<&str, ASTType, ParserError> {
-        let (input, ident_res) = opt(|i| self.parse_ident(i))(input)?;
+        let Ok((input, ident_res)) = opt::<_, _, nom::error::Error<_>, _>(|i| self.parse_ident(i))(input);
         if let Some(ident) = ident_res {
-            let (input, args_res) = opt(|i| delimited(
-                tag("["),
+            let (input, args_res) = opt::<_, _, nom::error::Error<_>, _>(|i| delimited(
+                tag::<_, _, nom::error::Error<_>>("["),
                 |i| {
-                    let (i, head) = self.parse_type(i)?;
-                    let (i, tail) = many0(preceded(tag(","), |i| self.parse_type(i)))(i)?;
+                    let Ok((i, head)) = self.parse_type(i);
+                    let Ok((i, tail)) = many0::<_, _, nom::error::Error<_>, _>(preceded(tag(","), |i| self.parse_type(i)))(i);
                     let mut args = vec![head];
                     args.extend(tail);
                     Ok((i, args))
                 },
-                tag("]"),
-            ))(input)?;
+                tag::<_, _, nom::error::Error<_>>("]"),
+            ))(input);
             let args = args_res.unwrap_or_default();
             Ok((
                 input,
@@ -354,9 +354,9 @@ impl Parser {
                 },
             ))
         } else {
-            let (input, value_res) = opt(|i| self.parse_int(i))(input)?;
+            let Ok((input, value_res)) = opt::<_, _, nom::error::Error<_>, _>(|i| self.parse_int(i))(input);
             if let Some(value) = value_res {
-                let (input, colon_res) = opt(|i| preceded(tag(":"), |i| self.parse_int(i)))(input)?;
+                let Ok((input, colon_res)) = opt::<_, _, nom::error::Error<_>, _>(|i| preceded(tag::<_, _, nom::error::Error<_>>(":"), |i| self.parse_int(i)))(input);
                 let mut colon = Vec::new();
                 if let Some(colon_value) = colon_res {
                     colon.push(ASTType {
@@ -372,7 +372,7 @@ impl Parser {
                     input,
                     ASTType {
                         pos: self.pos.clone(),
-                        value: Some(value),
+                        value: Some((value, IntFmt::Dec)),
                         ident: None,
                         string: None,
                         colon,
@@ -380,7 +380,7 @@ impl Parser {
                     },
                 ))
             } else {
-                let (input, string) = self.parse_string(input)?;
+                let Ok((input, string)) = self.parse_string(input);
                 Ok((
                     input,
                     ASTType {
@@ -402,17 +402,17 @@ impl Parser {
         &'a self,
         input: &'a str,
     ) -> IResult<&str, ASTField, ParserError> {
-        let (input, _) = multispace0(input)?;
-        let (input, name) = parse_ident(input)?;							
-        let (input, _) = tag(":")(input)?;								
-        let (input, typ) = parse_type(input)?;						
-        let (input, _) = multispace0(input)?;
+        let Ok((input, _)) = multispace0::<_, nom::error::Error<_>>(input);
+        let Ok((input, name)) = self.parse_ident(input);							
+        let Ok((input, _)) = tag::<_, _, nom::error::Error<_>>(":")(input);								
+        let Ok((input, typ)) = self.parse_type(input);						
+        let Ok((input, _)) = multispace0::<_, nom::error::Error<_>>(input);
         
         let (input, attrs) = opt(delimited(
-            tag("("),
-            separated_list(multispace1, parse_type),
-            tag(")"),
-        ))(input)?;
+            tag::<_, _, nom::error::Error<_>>("("),
+            separated_list0(multispace0, self::parse_type),
+            tag::<_, _, nom::error::Error<_>>(")"),
+        ))(input);
     
         let attrs = attrs.unwrap_or_default();
     
@@ -428,7 +428,7 @@ impl Parser {
         ))
 
 
-        Err(ParserError::NotAField.into())
+        /* Err(ParserError::NotAField.into()) */
     }
 
     pub fn parse_flags<'a>(
@@ -451,7 +451,7 @@ impl Parser {
         }
         let (remaining, _) = res.unwrap();
         // deal with the list
-        // int flags?
+        // int flags
         let res = self.parse_int(remaining);
         if let Ok((remaining, ast_int)) = res {
             let mut values: Vec<ASTInt> = Vec::new();
@@ -490,7 +490,7 @@ impl Parser {
             }
         }
 
-        // str flags?
+        // str flags
         let res = self.parse_string(remaining);
         if res.is_err() {
             return Err(ParserError::FlagsParseError.into());
@@ -539,31 +539,33 @@ impl Parser {
         input: &'a str,
     ) -> IResult<&str, CallNode, ParserError> {
         
-        let (input, name) = parse_ident(input)?;
+        let Ok((input, name)) = self.parse_ident(input);
         let call_name = name.name;
 
         let (input, args) = delimited(
-            tag("("),
+            tag::<_, _, nom::error::Error<_>>("("),
             separated_list0(
                 delimited(multispace0, tag(","), multispace0),
-                parse_field,
+                self::parse_field,
             ),
-            tag(")"),
-        )(input)?;
+            tag::<_, _, nom::error::Error<_>>(")"),
+        )(input);
 
-        let (input, ret) = opt(parse_type)(input)?;
+        let (input, ret) = opt::<_, _, nom::error::Error<_>, _>(self::parse_type)(input);
 
     
         /* Err(ParserError::NotACall.into()) */
-
-        CallNode {
-            pos: self.pos.clone(),
-            name,
-            call_name,
-            args,
-            ret,
-            attrs: vec![],
-        }
+        Ok((
+            input,
+            CallNode {
+                pos: self.pos.clone(),
+                name,
+                call_name,
+                args,
+                ret,
+                attrs: vec![],
+            },
+        ))
     }
 
     // TODO: implement this
